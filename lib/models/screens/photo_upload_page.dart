@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:flutter_gemini/flutter_gemini.dart';
 import 'dart:io';
 
 class PhotoUploadPage extends StatefulWidget {
@@ -12,44 +12,14 @@ class PhotoUploadPage extends StatefulWidget {
 
 class _PhotoUploadPageState extends State<PhotoUploadPage> {
   final List<File?> _images = List.generate(3, (_) => null);
-  final List<String> _imageAnalyses = List.generate(3, (_) => '');
+  final List<String?> _aiResults = List.generate(3, (_) => null);
   final ImagePicker _picker = ImagePicker();
+  bool _isLoading = false;
 
-  // Initialize Gemini AI model
-  final model = GenerativeModel(
-    model: 'gemini-pro-vision',
-    apiKey: 'YOUR_API_KEY', // Replace with your API key
-  );
-
-  Future<void> _analyzeImage(int index) async {
-    if (_images[index] == null) return;
-
-    try {
-      setState(() {
-        _imageAnalyses[index] = 'Analyzing...';
-      });
-
-      final bytes = await _images[index]!.readAsBytes();
-      final prompt =
-          TextPart('Please analyze this image and describe what you see.');
-      final imagePart = BytesPart(bytes);
-
-      final response = await model.generateContent([prompt, imagePart]);
-
-      setState(() {
-        _imageAnalyses[index] = response.text ?? 'No analysis available';
-      });
-    } catch (e) {
-      setState(() {
-        _imageAnalyses[index] = 'Analysis failed';
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to analyze image: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
+  @override
+  void initState() {
+    super.initState();
+    Gemini.init(apiKey: const String.fromEnvironment('GEMINI_API_KEY'));
   }
 
   Future<void> _showImageSourceDialog(int index) async {
@@ -77,15 +47,7 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
                     _getImage(ImageSource.gallery, index);
                   },
                 ),
-                if (_images[index] != null) ...[
-                  ListTile(
-                    leading: const Icon(Icons.analytics),
-                    title: const Text('Analyze Photo'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _analyzeImage(index);
-                    },
-                  ),
+                if (_images[index] != null)
                   ListTile(
                     leading: const Icon(Icons.delete, color: Colors.red),
                     title: const Text('Remove Photo',
@@ -95,7 +57,6 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
                       _removeImage(index);
                     },
                   ),
-                ],
               ],
             ),
           ),
@@ -116,113 +77,221 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
       if (pickedFile != null) {
         setState(() {
           _images[index] = File(pickedFile.path);
-          _imageAnalyses[index] = ''; // Clear previous analysis
+          _aiResults[index] = null; // Reset AI result when new image is picked
         });
-        // Automatically analyze new image
-        await _analyzeImage(index);
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Failed to pick image'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      _showErrorSnackBar('Failed to pick image');
     }
   }
 
   void _removeImage(int index) {
     setState(() {
       _images[index] = null;
-      _imageAnalyses[index] = '';
+      _aiResults[index] = null;
     });
   }
 
-  Widget _buildImageContainer(int index) {
-    return Column(
-      children: [
-        Expanded(
-          child: InkWell(
-            onTap: () => _showImageSourceDialog(index),
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey),
-                borderRadius: BorderRadius.circular(8),
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _analyzeImages() async {
+    setState(() => _isLoading = true);
+
+    try {
+      for (int i = 0; i < _images.length; i++) {
+        if (_images[i] != null) {
+          final response = await Gemini.instance.textAndImage(
+            text:
+                "Analyze this image and describe what you see in one sentence",
+            images: [_images[i]!.readAsBytesSync()],
+          );
+
+          setState(() {
+            _aiResults[i] = response?.output;
+          });
+        }
+      }
+
+      _showResultsBottomSheet();
+    } catch (e) {
+      _showErrorSnackBar('Failed to analyze images');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  void _showResultsBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        builder: (context, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
               ),
-              child: _images[index] == null
-                  ? const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.add_photo_alternate,
-                          size: 48,
-                          color: Colors.grey,
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Tap to add',
-                          style: TextStyle(
-                            color: Colors.grey,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    )
-                  : Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.file(
-                            _images[index]!,
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                        Positioned(
-                          top: 8,
-                          right: 8,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                decoration: const BoxDecoration(
-                                  color: Colors.black54,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: IconButton(
-                                  icon: const Icon(
-                                    Icons.edit,
-                                    color: Colors.white,
-                                    size: 20,
-                                  ),
-                                  onPressed: () =>
-                                      _showImageSourceDialog(index),
-                                ),
+              Text(
+                'AI Analysis Results',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollController,
+                  itemCount: _images.length,
+                  itemBuilder: (context, index) {
+                    if (_images[index] == null) return const SizedBox.shrink();
+
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.file(
+                                _images[index]!,
+                                width: 80,
+                                height: 80,
+                                fit: BoxFit.cover,
                               ),
-                            ],
-                          ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Image ${index + 1}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _aiResults[index] ??
+                                        'Analysis not available',
+                                    style: TextStyle(
+                                      color: _aiResults[index] != null
+                                          ? Colors.black87
+                                          : Colors.grey,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-            ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context); // Close bottom sheet
+                  // Navigate back or to next screen
+                  Navigator.pop(context);
+                },
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(50),
+                ),
+                child: const Text('Done'),
+              ),
+            ],
           ),
         ),
-        if (_imageAnalyses[index].isNotEmpty)
-          Container(
-            margin: const EdgeInsets.only(top: 8),
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.grey[200],
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              _imageAnalyses[index],
-              style: const TextStyle(fontSize: 12),
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-      ],
+      ),
+    );
+  }
+
+  Widget _buildImageContainer(int index) {
+    return InkWell(
+      onTap: () => _showImageSourceDialog(index),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: _images[index] == null
+            ? Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: const [
+                  Icon(
+                    Icons.add_photo_alternate,
+                    size: 48,
+                    color: Colors.grey,
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Tap to add',
+                    style: TextStyle(
+                      color: Colors.grey,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              )
+            : Stack(
+                fit: StackFit.expand,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.file(
+                      _images[index]!,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.black54,
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.edit,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        onPressed: () => _showImageSourceDialog(index),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+      ),
     );
   }
 
@@ -232,55 +301,77 @@ class _PhotoUploadPageState extends State<PhotoUploadPage> {
       appBar: AppBar(
         title: const Text('Upload Photos'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Upload your photos',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 32),
-            Expanded(
-              child: GridView.count(
-                crossAxisCount: 3,
-                mainAxisSpacing: 16,
-                crossAxisSpacing: 16,
-                children: List.generate(
-                  3,
-                  (index) => _buildImageContainer(index),
-                ),
-              ),
-            ),
-            const SizedBox(height: 32),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      body: Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Previous'),
+                const Text(
+                  'Upload your photos',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
                 ),
-                ElevatedButton(
-                  onPressed: _images.any((image) => image != null)
-                      ? () {
-                          // TODO: Implement form submission with images and analyses
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Form submitted successfully!'),
-                            ),
-                          );
-                        }
-                      : null,
-                  child: const Text('Submit'),
+                const SizedBox(height: 32),
+                Expanded(
+                  child: GridView.count(
+                    crossAxisCount: 3,
+                    mainAxisSpacing: 16,
+                    crossAxisSpacing: 16,
+                    children: List.generate(
+                      3,
+                      (index) => _buildImageContainer(index),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 32),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      onPressed:
+                          _isLoading ? null : () => Navigator.pop(context),
+                      child: const Text('Previous'),
+                    ),
+                    ElevatedButton(
+                      onPressed:
+                          _isLoading || !_images.any((image) => image != null)
+                              ? null
+                              : _analyzeImages,
+                      child: _isLoading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Submit'),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+          if (_isLoading)
+            Container(
+              color: Colors.black26,
+              child: const Center(
+                child: Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 16),
+                        Text('Analyzing images...'),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
