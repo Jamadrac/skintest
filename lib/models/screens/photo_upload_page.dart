@@ -1,376 +1,286 @@
+import 'dart:io';
+import 'package:animated_text_kit/animated_text_kit.dart';
+import 'package:awesome_dialog/awesome_dialog.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_gemini/flutter_gemini.dart';
-import 'dart:io';
 
-class PhotoUploadPage extends StatefulWidget {
-  const PhotoUploadPage({super.key});
+class DiseaseDetection extends StatefulWidget {
+  const DiseaseDetection({super.key});
 
   @override
-  State<PhotoUploadPage> createState() => _PhotoUploadPageState();
+  State<DiseaseDetection> createState() => _MyDiseaseDetectionState();
 }
 
-class _PhotoUploadPageState extends State<PhotoUploadPage> {
-  final List<File?> _images = List.generate(3, (_) => null);
-  final List<String?> _aiResults = List.generate(3, (_) => null);
-  final ImagePicker _picker = ImagePicker();
-  bool _isLoading = false;
+class _MyDiseaseDetectionState extends State<DiseaseDetection> {
+  final gemini = Gemini.instance;
+  File? _selectedImage;
+  String diseaseName = '';
+  String diseasePrecautions = '';
+  bool detecting = false;
+  bool precautionLoading = false;
 
-  @override
-  void initState() {
-    super.initState();
-    Gemini.init(apiKey: const String.fromEnvironment('GEMINI_API_KEY'));
+  Future<void> _pickImage(ImageSource source) async {
+    final pickedFile =
+        await ImagePicker().pickImage(source: source, imageQuality: 50);
+    if (pickedFile != null) {
+      setState(() {
+        _selectedImage = File(pickedFile.path);
+      });
+    }
   }
 
-  Future<void> _showImageSourceDialog(int index) async {
-    return showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Select Image Source'),
-          content: SingleChildScrollView(
-            child: ListBody(
-              children: <Widget>[
-                ListTile(
-                  leading: const Icon(Icons.camera_alt),
-                  title: const Text('Take a Photo'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _getImage(ImageSource.camera, index);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.photo_library),
-                  title: const Text('Choose from Gallery'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _getImage(ImageSource.gallery, index);
-                  },
-                ),
-                if (_images[index] != null)
-                  ListTile(
-                    leading: const Icon(Icons.delete, color: Colors.red),
-                    title: const Text('Remove Photo',
-                        style: TextStyle(color: Colors.red)),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _removeImage(index);
-                    },
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _getImage(ImageSource source, int index) async {
+  detectDisease() async {
+    setState(() {
+      detecting = true;
+    });
     try {
-      final XFile? pickedFile = await _picker.pickImage(
-        source: source,
-        maxWidth: 1200,
-        maxHeight: 1200,
-        imageQuality: 85,
-      );
-
-      if (pickedFile != null) {
+      if (_selectedImage != null) {
+        final imageBytes = await _selectedImage!.readAsBytes();
+        final result = await gemini.textAndImage(
+          text:
+              "Identify any skin health issues in this image. Respond only with the name of the condition identified, no explanations. If unrecognizable, respond with 'I don't know'. If not skin-related, respond with 'Please pick another image'.",
+          images: [imageBytes],
+        );
         setState(() {
-          _images[index] = File(pickedFile.path);
-          _aiResults[index] = null; // Reset AI result when new image is picked
+          diseaseName = result?.content?.parts?.firstOrNull?.text ??
+              "Unable to detect disease";
         });
       }
-    } catch (e) {
-      _showErrorSnackBar('Failed to pick image');
-    }
-  }
-
-  void _removeImage(int index) {
-    setState(() {
-      _images[index] = null;
-      _aiResults[index] = null;
-    });
-  }
-
-  void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  Future<void> _analyzeImages() async {
-    setState(() => _isLoading = true);
-
-    try {
-      for (int i = 0; i < _images.length; i++) {
-        if (_images[i] != null) {
-          final response = await Gemini.instance.textAndImage(
-            text:
-                "Analyze this image and describe what you see in one sentence",
-            images: [_images[i]!.readAsBytesSync()],
-          );
-
-          setState(() {
-            _aiResults[i] = response?.output;
-          });
-        }
-      }
-
-      _showResultsBottomSheet();
-    } catch (e) {
-      _showErrorSnackBar('Failed to analyze images');
+    } catch (error) {
+      _showErrorSnackBar(error);
     } finally {
-      setState(() => _isLoading = false);
+      setState(() {
+        detecting = false;
+      });
+    }
+  }
+  // tio
+
+  showPrecautions() async {
+    setState(() {
+      precautionLoading = true;
+    });
+    try {
+      if (diseasePrecautions == '') {
+        final result = await gemini.text(
+          "Provide exactly three precautionary measures to prevent or manage this skin disease: $diseaseName. Each measure should be one sentence, in bullet-point format. No additional information needed.",
+        );
+        diseasePrecautions = result?.content?.parts?.firstOrNull?.text ??
+            "Unable to get precautions";
+      }
+      _showSuccessDialog(diseaseName, diseasePrecautions);
+    } catch (error) {
+      _showErrorSnackBar(error);
+    } finally {
+      setState(() {
+        precautionLoading = false;
+      });
     }
   }
 
-  void _showResultsBottomSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        minChildSize: 0.3,
-        maxChildSize: 0.9,
-        builder: (context, scrollController) => Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              Text(
-                'AI Analysis Results',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: ListView.builder(
-                  controller: scrollController,
-                  itemCount: _images.length,
-                  itemBuilder: (context, index) {
-                    if (_images[index] == null) return const SizedBox.shrink();
-
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 16),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.file(
-                                _images[index]!,
-                                width: 80,
-                                height: 80,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Image ${index + 1}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _aiResults[index] ??
-                                        'Analysis not available',
-                                    style: TextStyle(
-                                      color: _aiResults[index] != null
-                                          ? Colors.black87
-                                          : Colors.grey,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context); // Close bottom sheet
-                  // Navigate back or to next screen
-                  Navigator.pop(context);
-                },
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(50),
-                ),
-                child: const Text('Done'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  void _showErrorSnackBar(Object error) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(error.toString()),
+      backgroundColor: Colors.red,
+    ));
   }
 
-  Widget _buildImageContainer(int index) {
-    return InkWell(
-      onTap: () => _showImageSourceDialog(index),
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: _images[index] == null
-            ? Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(
-                    Icons.add_photo_alternate,
-                    size: 48,
-                    color: Colors.grey,
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Tap to add',
-                    style: TextStyle(
-                      color: Colors.grey,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              )
-            : Stack(
-                fit: StackFit.expand,
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.file(
-                      _images[index]!,
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: Container(
-                      decoration: const BoxDecoration(
-                        color: Colors.black54,
-                        shape: BoxShape.circle,
-                      ),
-                      child: IconButton(
-                        icon: const Icon(
-                          Icons.edit,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                        onPressed: () => _showImageSourceDialog(index),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-      ),
-    );
+  void _showSuccessDialog(String title, String content) {
+    AwesomeDialog(
+      context: context,
+      dialogType: DialogType.success,
+      animType: AnimType.rightSlide,
+      title: title,
+      desc: content,
+      btnOkText: 'Got it',
+      btnOkColor: Theme.of(context).primaryColor,
+      btnOkOnPress: () {},
+    ).show();
   }
 
   @override
   Widget build(BuildContext context) {
+    final themeColor = Theme.of(context).primaryColor;
+    final textColor = Colors.white;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Upload Photos'),
-      ),
-      body: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text(
-                  'Upload your photos',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 32),
-                Expanded(
-                  child: GridView.count(
-                    crossAxisCount: 3,
-                    mainAxisSpacing: 16,
-                    crossAxisSpacing: 16,
-                    children: List.generate(
-                      3,
-                      (index) => _buildImageContainer(index),
-                    ),
+      body: Column(
+        children: <Widget>[
+          const SizedBox(height: 20),
+          Stack(
+            children: [
+              Container(
+                height: MediaQuery.of(context).size.height * 0.23,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(50.0),
                   ),
+                  color: themeColor,
                 ),
-                const SizedBox(height: 32),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton(
-                      onPressed:
-                          _isLoading ? null : () => Navigator.pop(context),
-                      child: const Text('Previous'),
-                    ),
-                    ElevatedButton(
-                      onPressed:
-                          _isLoading || !_images.any((image) => image != null)
-                              ? null
-                              : _analyzeImages,
-                      child: _isLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Submit'),
+              ),
+              Container(
+                height: MediaQuery.of(context).size.height * 0.2,
+                width: double.infinity,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(50.0),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black12,
+                      spreadRadius: 1,
+                      blurRadius: 5,
+                      offset: Offset(2, 2),
                     ),
                   ],
                 ),
-              ],
-            ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: <Widget>[
+                    ElevatedButton(
+                      onPressed: () => _pickImage(ImageSource.gallery),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: themeColor,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('OPEN GALLERY',
+                              style: TextStyle(color: textColor)),
+                          const SizedBox(width: 10),
+                          Icon(Icons.image, color: textColor)
+                        ],
+                      ),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => _pickImage(ImageSource.camera),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: themeColor,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('START CAMERA',
+                              style: TextStyle(color: textColor)),
+                          const SizedBox(width: 10),
+                          Icon(Icons.camera_alt, color: textColor)
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          if (_isLoading)
-            Container(
-              color: Colors.black26,
-              child: const Center(
-                child: Card(
-                  child: Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CircularProgressIndicator(),
-                        SizedBox(height: 16),
-                        Text('Analyzing images...'),
-                      ],
+          _selectedImage == null
+              ? SizedBox(
+                  height: MediaQuery.of(context).size.height * 0.5,
+                  child: Image.asset('assets/images/pick1.png'),
+                )
+              : Expanded(
+                  child: Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    padding: const EdgeInsets.all(20),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Image.file(
+                        _selectedImage!,
+                        fit: BoxFit.cover,
+                      ),
                     ),
                   ),
                 ),
-              ),
+          if (_selectedImage != null)
+            detecting
+                ? SpinKitWave(
+                    color: themeColor,
+                    size: 30,
+                  )
+                : Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: themeColor,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 30,
+                          vertical: 15,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                      ),
+                      onPressed: detectDisease,
+                      child: const Text(
+                        'DETECT',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+          if (diseaseName != '')
+            Column(
+              children: [
+                Container(
+                  height: MediaQuery.of(context).size.height * 0.2,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      DefaultTextStyle(
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                        ),
+                        child: AnimatedTextKit(
+                          isRepeatingAnimation: false,
+                          repeatForever: false,
+                          displayFullTextOnTap: true,
+                          totalRepeatCount: 1,
+                          animatedTexts: [
+                            TyperAnimatedText(
+                              diseaseName.trim(),
+                            ),
+                          ],
+                        ),
+                      )
+                    ],
+                  ),
+                ),
+                precautionLoading
+                    ? const SpinKitWave(
+                        color: Colors.blue,
+                        size: 30,
+                      )
+                    : ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 30,
+                            vertical: 15,
+                          ),
+                        ),
+                        onPressed: showPrecautions,
+                        child: Text(
+                          'PRECAUTION',
+                          style: TextStyle(color: textColor),
+                        ),
+                      ),
+              ],
             ),
+          const SizedBox(height: 30),
         ],
       ),
     );

@@ -2,9 +2,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_gemini/flutter_gemini.dart';
 import 'package:skintest/models/screens/Form3Screen.dart';
+import './chat/consts.dart';
 
 void main() {
-  Gemini.init(apiKey: "AIzaSyDZu8o67zJyLeus-kyq53EjCKocc-Wi91s");
+  Gemini.init(
+    apiKey: GEMINI_API_KEY,
+  );
   runApp(const SkinAssessmentApp());
 }
 

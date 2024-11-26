@@ -77,7 +77,7 @@ class _MedicalHistoryPageState extends State<MedicalHistoryPage> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => const PhotoUploadPage(),
+                            builder: (context) => const DiseaseDetection(),
                           ),
                         );
                       }
